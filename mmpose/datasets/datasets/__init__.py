@@ -16,7 +16,7 @@ from .hand import (FreiHandDataset, HandCocoWholeBodyDataset,
                    PanopticDataset)
 from .mesh import (MeshAdversarialDataset, MeshH36MDataset, MeshMixDataset,
                    MoshDataset)
-from .top_down import (TopDownAicDataset, TopDownCocoDataset,
+from .top_down import (TopDownAicDataset, TopDownCocoDataset, TopDownChargerDataset,
                        TopDownCocoWholeBodyDataset, TopDownCrowdPoseDataset,
                        TopDownH36MDataset, TopDownJhmdbDataset,
                        TopDownMhpDataset, TopDownMpiiDataset,
@@ -38,5 +38,5 @@ __all__ = [
     'FaceWFLWDataset', 'FaceCOFWDataset', 'FaceCocoWholeBodyDataset',
     'Body3DH36MDataset', 'AnimalHorse10Dataset', 'AnimalMacaqueDataset',
     'AnimalFlyDataset', 'AnimalLocustDataset', 'AnimalZebraDataset',
-    'AnimalATRWDataset', 'AnimalPoseDataset', 'TopDownH36MDataset'
+    'AnimalATRWDataset', 'AnimalPoseDataset', 'TopDownH36MDataset', 'TopDownChargerDataset'
 ]
