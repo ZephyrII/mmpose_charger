@@ -107,7 +107,7 @@ def _box2cs(cfg, box):
     # pixel std is 200.0
     scale = np.array([w / 200.0, h / 200.0], dtype=np.float32)
 
-    scale = scale * 1.25
+    # scale = scale * 1.25
 
     return center, scale
 
@@ -318,10 +318,12 @@ def _inference_single_pose_model(model,
     batch_data['img_metas'] = [
         img_metas[0] for img_metas in batch_data['img_metas'].data
     ]
+    # cv2.imwrite('/root/catkin_ws/src/charger_kpts_train/src/test/test.jpg', batch_data['img'].detach().cpu().numpy()[0].transpose((1,2,0))*255)
 
     # forward the model
     with torch.no_grad():
         result = model(
+            mode="test",
             img=batch_data['img'],
             img_metas=batch_data['img_metas'],
             return_loss=False,

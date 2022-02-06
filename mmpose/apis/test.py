@@ -9,6 +9,35 @@ import torch
 import torch.distributed as dist
 from mmcv.runner import get_dist_info
 
+def single_gpu_val(model, data_loader):
+    """Test model with a single gpu.
+
+    This method tests model with a single gpu and displays test progress bar.
+
+    Args:
+        model (nn.Module): Model to be tested.
+        data_loader (nn.Dataloader): Pytorch data loader.
+
+
+    Returns:
+        list: The prediction results.
+    """
+
+    model.eval()
+    results = []
+    dataset = data_loader.dataset
+    prog_bar = mmcv.ProgressBar(len(dataset))
+    for data in data_loader:
+        with torch.no_grad():
+            result = model(mode="val", **data)
+        results.append(result)
+
+        # use the first key as main key to calculate the batch size
+        batch_size = len(next(iter(data.values())))
+        for _ in range(batch_size):
+            prog_bar.update()
+    return results
+
 
 def single_gpu_test(model, data_loader):
     """Test model with a single gpu.
@@ -30,7 +59,7 @@ def single_gpu_test(model, data_loader):
     prog_bar = mmcv.ProgressBar(len(dataset))
     for data in data_loader:
         with torch.no_grad():
-            result = model(return_loss=False, **data)
+            result = model(mode="test", **data)
         results.append(result)
 
         # use the first key as main key to calculate the batch size

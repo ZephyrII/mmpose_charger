@@ -8,6 +8,7 @@ from ....core.post_processing import oks_nms, soft_oks_nms, oks_iou
 from mmpose.core.evaluation.top_down_eval import keypoint_pck_accuracy, pose_pck_accuracy
 
 from mmcv import Config
+import random
 
 from ...builder import DATASETS
 from ..base import Kpt2dSviewRgbImgTopDownDataset
@@ -70,9 +71,11 @@ class TopDownChargerDataset(Kpt2dSviewRgbImgTopDownDataset):
         self.nms_thr = data_cfg['nms_thr']
         self.oks_thr = data_cfg['oks_thr']
         self.vis_thr = data_cfg['vis_thr']
+        self.slice_size = data_cfg['image_size']
 
         self.ann_dir = ann_dir
         self.annotations = os.listdir(ann_dir)
+        random.shuffle(self.annotations)
 
         self.num_images = len(self.annotations)
         self.db = self._get_db()
@@ -103,11 +106,7 @@ class TopDownChargerDataset(Kpt2dSviewRgbImgTopDownDataset):
             ymax = float(box.find('ymax').text)*img_height
             x, y, w, h = xmin, ymin, xmax-xmin, ymax-ymin
             center, scale = self._xywh2cs(x, y, w, h)
-            x1 = max(0, x)
-            y1 = max(0, y)
-            x2 = min(img_width - 1, x1 + max(0, w - 1))
-            y2 = min(img_height - 1, y1 + max(0, h - 1))
-            bbox = [x1, y1, x2 - x1, y2 - y1]
+            bbox = [x,y,w,h]
 
             for i in range(self.ann_info['num_joints']):
                 kp = kps.find('keypoint' + str(i))
@@ -160,32 +159,22 @@ class TopDownChargerDataset(Kpt2dSviewRgbImgTopDownDataset):
         """
         kpts = defaultdict(list)
         avg_acc = []
+        avg_mse_loss = []
 
         for output in outputs:
             preds = output['preds']
             boxes = output['boxes']
             image_paths = output['image_paths']
             bbox_ids = output['bbox_ids']
+            avg_mse_loss.append(output["mse_loss"].cpu().numpy())
 
             batch_size = len(image_paths)
             for i in range(batch_size):
                 gt_kpt, bbox_h_w = self.read_annotation(image_paths[i].split('/')[-1][:-4]+'.txt')
-                _, acc, _ = keypoint_pck_accuracy(np.expand_dims(preds[i, :, :2], 0), np.expand_dims(gt_kpt, 0), np.full((1,4), True), 0.05, np.expand_dims(bbox_h_w, 0))
+                _, acc, _ = keypoint_pck_accuracy(np.expand_dims(preds[i, :, :2], 0), np.expand_dims(gt_kpt, 0), np.full((1,4), True), 0.01, np.array([self.slice_size]))
                 avg_acc.append(acc)
-        #         kpts[image_id].append({
-        #             'keypoints': preds[i],
-        #             'gt_kpt': gt_kpt,
-        #             'center': boxes[i][0:2],
-        #             'scale': boxes[i][2:4],
-        #             'area': boxes[i][4],
-        #             'score': boxes[i][5],
-        #             'image_id': image_id,
-        #             'image_name': image_paths[i],
-        #             'bbox_id': bbox_ids[i]
-        #         })
-        # kpts = self._sort_and_unique_bboxes(kpts)
 
-        return {"acc":sum(avg_acc) / len(avg_acc)}
+        return {"acc":np.average(avg_acc), "mse_loss":np.average(avg_mse_loss)}
 
     def read_annotation(self, file_name):
         ann_path = os.path.join(self.ann_dir, file_name)
