@@ -56,7 +56,8 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                  align_corners=False,
                  loss_keypoint=None,
                  train_cfg=None,
-                 test_cfg=None):
+                 test_cfg=None,
+                 dropout_p=1.0):
         super().__init__()
 
         self.in_channels = in_channels
@@ -78,6 +79,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                 num_deconv_layers,
                 num_deconv_filters,
                 num_deconv_kernels,
+                dropout_p,
             )
         elif num_deconv_layers == 0:
             self.deconv_layers = nn.Identity()
@@ -290,7 +292,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
 
         return inputs
 
-    def _make_deconv_layer(self, num_layers, num_filters, num_kernels):
+    def _make_deconv_layer(self, num_layers, num_filters, num_kernels, dropout_p=0.0):
         """Make deconv layers."""
         if num_layers != len(num_filters):
             error_msg = f'num_layers({num_layers}) ' \
@@ -317,6 +319,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                     padding=padding,
                     output_padding=output_padding,
                     bias=False))
+            layers.append(nn.Dropout(p=dropout_p, inplace=True))
             layers.append(nn.BatchNorm2d(planes))
             layers.append(nn.ReLU(inplace=True))
             self.in_channels = planes
