@@ -1,8 +1,8 @@
 _base_ = ['../_base_/datasets/charger_tape.py']
 log_level = 'INFO'
 load_from = None
-ex_name = "c_hrnet32_udp_512_hm256_e20"
-# resume_from = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/epoch_7.pth"
+ex_name = "c_hrnet32_udp_512_hm128_repr_v2"
+# resume_from = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/epoch_1.pth"
 resume_from = None
 dist_params = dict(backend='nccl')
 workflow = [('train', 1)]
@@ -12,7 +12,7 @@ work_dir = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/"
 
 optimizer = dict(
     type='Adam',
-    lr=5e-5,
+    lr=1e-5,
 )
 optimizer_config = dict(grad_clip=None)
 # learning policy
@@ -22,20 +22,20 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=0.001,
     step=[2, 3, 6])
-total_epochs = 20
+total_epochs = 15
 log_config = dict(
     interval=50,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='NeptuneLoggerHook',
             init_kwargs=dict(
-                # run="CHAR-237",
+                # run="CHAR-287",
                 # project="tnowak/charger")
                 # mode="debug",
                 project='charger',
                 api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4NGRmMmFkNi0wMWNjLTQxY2EtYjQ1OS01YjQ0YzRkYmFlNGIifQ==",
                 name=ex_name,
-                tags=["HRNet32", "512", "HM256", "aug", "e20"])
+                tags=["HRNet32", "512", "HM128", "aug", "repr_cost", "e15"])
             )
     ])
 
@@ -85,13 +85,10 @@ model = dict(
                 num_channels=(32, 64, 128, 256))),
     ),
     keypoint_head=dict(
-        type='TopdownHeatmapSimpleHead',
+        type='TopdownHeatmapReprCostHead',
         in_channels=32,
         out_channels=channel_cfg['num_output_channels'],
-        # num_deconv_layers=0,
-        num_deconv_layers=1,
-        num_deconv_filters=(256,),
-        num_deconv_kernels=(4,),
+        num_deconv_layers=0,
         extra=dict(final_conv_kernel=1, ),
         loss_keypoint=dict(type='JointsMSELoss', use_target_weight=True)),
     train_cfg=dict(),
@@ -105,7 +102,7 @@ model = dict(
 
 data_cfg = dict(
     image_size=[512, 512],
-    heatmap_size=[256, 256],
+    heatmap_size=[128, 128],
     num_output_channels=channel_cfg['num_output_channels'],
     num_joints=channel_cfg['dataset_joints'],
     dataset_channel=channel_cfg['dataset_channel'],
@@ -151,7 +148,7 @@ train_pipeline = [
         type='Collect',
         keys=['img', 'target', 'target_weight'],
         meta_keys=[
-            'image_file', 'joints_3d', 'joints_3d_visible', 'center', 'scale',
+            'image_file', 'joints_3d', 'joints_3d_visible', 'center', 'scale', 'bbox',
             'rotation', 'bbox_score', 'flip_pairs'
         ]),
 ]
@@ -173,7 +170,7 @@ val_pipeline = [
         type='Collect',
         keys=['img', "target", "target_weight"],
         meta_keys=[
-            'image_file', 'center', 'scale', 'rotation', 'bbox_score',
+            'image_file', 'center', 'scale', 'rotation', 'bbox_score', 'bbox',
             'flip_pairs'
         ]),
 ]

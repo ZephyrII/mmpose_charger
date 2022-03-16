@@ -152,21 +152,17 @@ class TopDownCharger(BasePose):
 
     def forward_train(self, img, target, target_weight, img_metas, **kwargs):
         """Defines the computation performed at every call when training."""
-        cv2.imwrite('/root/catkin_ws/src/charger_kpts_train/src/test/train.jpg', img.detach().cpu().numpy()[0].transpose((1,2,0))*255)
+        # cv2.imwrite('/root/catkin_ws/src/charger_kpts_train/src/test/train.jpg', img.detach().cpu().numpy()[0].transpose((1,2,0))*255)
         output = self.backbone(img)
         if self.with_neck:
             output = self.neck(output)
-            # print("neck output.shape()\n\n\n", len(output), output[0].shape)
         if self.with_keypoint:
             output = self.keypoint_head(output)
 
-        # print("output.shape()\n\n\n", len(output), output[0].shape)
-        # print("target.shape()\n\n\n", len(target), target[0].shape)
-        # if return loss
         losses = dict()
         if self.with_keypoint:
             keypoint_losses = self.keypoint_head.get_loss(
-                output, target, target_weight)
+                output, target, target_weight, img_metas)
             losses.update(keypoint_losses)
             keypoint_accuracy = self.keypoint_head.get_accuracy(
                 output, target, target_weight)
@@ -185,7 +181,7 @@ class TopDownCharger(BasePose):
     ):
         """Defines the computation performed at every call when validating.
         Generate predictions and calc metrics using gt data"""
-        cv2.imwrite('/root/catkin_ws/src/charger_kpts_train/src/test/val.jpg', img.detach().cpu().numpy()[0].transpose((1,2,0))*255)
+        # cv2.imwrite('/root/catkin_ws/src/charger_kpts_train/src/test/val.jpg', img.detach().cpu().numpy()[0].transpose((1,2,0))*255)
         assert img.size(0) == len(img_metas)
         batch_size, _, img_height, img_width = img.shape
         if batch_size > 1:
@@ -201,7 +197,7 @@ class TopDownCharger(BasePose):
 
         result = dict()
         if self.with_keypoint:
-            keypoint_losses = self.keypoint_head.get_loss(output, target, target_weight)
+            keypoint_losses = self.keypoint_head.get_loss(output, target, target_weight, img_metas)
             result.update(keypoint_losses)
             keypoint_accuracy = self.keypoint_head.get_accuracy(
                 output, target, target_weight

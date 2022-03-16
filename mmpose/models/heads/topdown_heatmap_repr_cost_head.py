@@ -1,19 +1,24 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 import torch.nn as nn
+import numpy as np
+import cv2
+from scipy.optimize import least_squares
 from mmcv.cnn import (build_conv_layer, build_norm_layer, build_upsample_layer,
                       constant_init, normal_init)
 
 from mmpose.core.evaluation import pose_pck_accuracy
+from mmpose.core.evaluation.top_down_eval import _get_max_preds
 from mmpose.core.post_processing import flip_back
 from mmpose.models.builder import build_loss
 from mmpose.models.utils.ops import resize
 from ..builder import HEADS
 from .topdown_heatmap_base_head import TopdownHeatmapBaseHead
+from scipy.spatial.transform import Rotation
 
 
 @HEADS.register_module()
-class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
+class TopdownHeatmapReprCostHead(TopdownHeatmapBaseHead):
     """Top-down heatmap simple head. paper ref: Bin Xiao et al. ``Simple
     Baselines for Human Pose Estimation and Tracking``.
 
@@ -59,6 +64,8 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                  test_cfg=None,
                  dropout_p=0.0):
         super().__init__()
+        self.object_points = [[-0.35792, -0.02384, -0.63703], [0.3991, -0.01473, -0.60985],
+                              [2.82224, -0.90896, -0.05048], [-0.10018, -0.74608, -0.05833]]
 
         self.in_channels = in_channels
         self.loss = build_loss(loss_keypoint)
@@ -70,6 +77,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
         self._init_inputs(in_channels, in_index, input_transform)
         self.in_index = in_index
         self.align_corners = align_corners
+        self.extra = extra
 
         if extra is not None and not isinstance(extra, dict):
             raise TypeError('extra should be dict or None.')
@@ -123,7 +131,8 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                             kernel_size=num_conv_kernels[i],
                             stride=1,
                             padding=(num_conv_kernels[i] - 1) // 2))
-                    # layers.append(nn.Dropout(p=dropout_p, inplace=True))
+
+                    layers.append(nn.Dropout(p=dropout_p, inplace=True))
                     layers.append(
                         build_norm_layer(dict(type='BN'), conv_channels)[1])
                     layers.append(nn.ReLU(inplace=True))
@@ -141,6 +150,89 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                 self.final_layer = nn.Sequential(*layers)
             else:
                 self.final_layer = layers[0]
+
+    def _get_max_preds_tensor(self, heatmaps):
+        """Get keypoint predictions from score maps.
+
+        Note:
+            batch_size: N
+            num_keypoints: K
+            heatmap height: H
+            heatmap width: W
+
+        Args:
+            heatmaps (np.ndarray[N, K, H, W]): model predicted heatmaps.
+
+        Returns:
+            tuple: A tuple containing aggregated results.
+
+            - preds (np.ndarray[N, K, 2]): Predicted keypoint location.
+            - maxvals (np.ndarray[N, K, 1]): Scores (confidence) of the keypoints.
+        """
+        N, K, _, W = heatmaps.shape
+        heatmaps_reshaped = heatmaps.reshape((N, K, -1))
+        # idx = np.argmax(heatmaps_reshaped, 2).reshape((N, K, 1))
+        idx = torch.argmax(heatmaps_reshaped, 2).reshape((N, K, 1))
+        # maxvals = np.amax(heatmaps_reshaped, 2).reshape((N, K, 1))
+        maxvals = torch.amax(heatmaps_reshaped, 2).reshape((N, K, 1))
+
+        # preds = np.tile(idx, (1, 1, 2)).astype(np.float32)
+        preds = torch.tile(idx, (1, 1, 2))
+        preds[:, :, 0] = preds[:, :, 0] % W
+        preds[:, :, 1] = preds[:, :, 1] // W
+
+        # preds = np.where(np.tile(maxvals, (1, 1, 2)) > 0.0, preds, -1)
+        preds = torch.where(torch.tile(maxvals, (1, 1, 2)) > 0.0, preds, -1)
+        return preds
+
+    def repr_loss(self, output, img_metas, hm_size):
+        # print("hm_size", hm_size)
+        preds, _ = _get_max_preds(output.detach().cpu().numpy())
+        kpts3d = self.object_points
+        x = np.array([0.4,0,0,0,0,30]).astype(np.float32)
+        K = np.array([[4950,0,2620], [0,4960,1888], [0,0,1]]).astype(np.float32)
+
+        def convert_joints3d(joints3d, r, s, t) -> np.ndarray:
+            """Apply rotation, scale and translation to joints3d to generate glob_joints_3d
+            Parameters
+            ----------
+            kpts_format: str
+                Format of used kpt (coco or spin)
+            """
+
+            R, _ = cv2.Rodrigues(r)
+            joints3d = joints3d @ R
+            joints3d_tr = (
+                joints3d * s + t
+            )
+            return joints3d_tr
+        def fun_ls(x,pred):
+            r, t = x[:3], x[3:]
+            j3d_tr = convert_joints3d(kpts3d, r, np.ones(3), t)
+            j2d, _ = cv2.projectPoints(j3d_tr, np.zeros(3), np.zeros(3), K, None)
+            proj = j2d[:, 0, :]#*scale+offset
+
+            loss = proj.reshape((-1))-pred.reshape((-1))
+            return loss
+        loss=0
+        for i, pred in enumerate(preds):
+            # print("keys", img_metas[i].keys())
+            bbox_x, bbox_y, bbox_w, bbox_h = img_metas[i]['bbox']
+            scale = np.array([bbox_w/hm_size[0], bbox_h/hm_size[1]])
+            offset = np.array([bbox_x, bbox_y])
+            # print("pred0", pred)
+            pred = pred*scale+offset
+
+            bounds = ((-np.pi/4,-np.pi/4,-np.pi/4,-50,-20, 0),
+                    (np.pi/4, np.pi/4, np.pi/4, 50, 20, 50))
+            # opt = least_squares(fun_ls, x, method='lm', kwargs={'pred':pred})
+            opt = least_squares(fun_ls, x, bounds=bounds, kwargs={'pred':pred})#, method='lm')
+            # x = opt.x
+            # print(Rotation.from_rotvec(x[:3]).as_euler('zyx', degrees=True))
+            loss+=opt.cost
+        # print("x", x, opt.message)
+        return loss
+
 
     def get_loss(self, output, target, target_weight, img_metas):
         """Calculate top-down keypoint loss.
@@ -163,6 +255,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
         assert not isinstance(self.loss, nn.Sequential)
         assert target.dim() == 4 and target_weight.dim() == 3
         losses['mse_loss'] = self.loss(output, target, target_weight)
+        losses['repr_loss'] = self.repr_loss(output, img_metas, self.extra['hm_size'])/100
 
         return losses
 
@@ -320,7 +413,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                     padding=padding,
                     output_padding=output_padding,
                     bias=False))
-            # layers.append(nn.Dropout(p=dropout_p, inplace=True))
+            layers.append(nn.Dropout(p=dropout_p, inplace=True))
             layers.append(nn.BatchNorm2d(planes))
             layers.append(nn.ReLU(inplace=True))
             self.in_channels = planes

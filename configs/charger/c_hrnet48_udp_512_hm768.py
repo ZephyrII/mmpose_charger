@@ -1,7 +1,7 @@
 _base_ = ['../_base_/datasets/charger_tape.py']
 log_level = 'INFO'
 load_from = None
-ex_name = "c_hrnet32_udp_512_hm256_e20"
+ex_name = "c_hrnet48_udp_512_hm768"
 # resume_from = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/epoch_7.pth"
 resume_from = None
 dist_params = dict(backend='nccl')
@@ -22,7 +22,7 @@ lr_config = dict(
     warmup_iters=500,
     warmup_ratio=0.001,
     step=[2, 3, 6])
-total_epochs = 20
+total_epochs = 10
 log_config = dict(
     interval=50,
     hooks=[
@@ -31,11 +31,11 @@ log_config = dict(
             init_kwargs=dict(
                 # run="CHAR-237",
                 # project="tnowak/charger")
-                # mode="debug",
+                mode="debug",
                 project='charger',
                 api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4NGRmMmFkNi0wMWNjLTQxY2EtYjQ1OS01YjQ0YzRkYmFlNGIifQ==",
                 name=ex_name,
-                tags=["HRNet32", "512", "HM256", "aug", "e20"])
+                tags=["512", "HM768", "aug"])
             )
     ])
 
@@ -54,7 +54,7 @@ channel_cfg = dict(
 model = dict(
     type='TopDownCharger',
     pretrained='https://download.openmmlab.com/mmpose/'
-    'pretrain_models/hrnet_w32-36af842e.pth',
+    'pretrain_models/hrnet_w48-8ef0771d.pth',
     backbone=dict(
         type='HRNet',
         in_channels=3,
@@ -70,28 +70,28 @@ model = dict(
                 num_branches=2,
                 block='BASIC',
                 num_blocks=(4, 4),
-                num_channels=(32, 64)),
+                num_channels=(48, 96)),
             stage3=dict(
                 num_modules=4,
                 num_branches=3,
                 block='BASIC',
                 num_blocks=(4, 4, 4),
-                num_channels=(32, 64, 128)),
+                num_channels=(48, 96, 192)),
             stage4=dict(
-                num_modules=3, 
+                num_modules=3,
                 num_branches=4,
                 block='BASIC',
                 num_blocks=(4, 4, 4, 4),
-                num_channels=(32, 64, 128, 256))),
+                num_channels=(48, 96, 192, 384))),
     ),
     keypoint_head=dict(
         type='TopdownHeatmapSimpleHead',
-        in_channels=32,
+        in_channels=48,
         out_channels=channel_cfg['num_output_channels'],
         # num_deconv_layers=0,
-        num_deconv_layers=1,
-        num_deconv_filters=(256,),
-        num_deconv_kernels=(4,),
+        num_deconv_layers=3,
+        num_deconv_filters=(256,256, 256),
+        num_deconv_kernels=(4,4,4),
         extra=dict(final_conv_kernel=1, ),
         loss_keypoint=dict(type='JointsMSELoss', use_target_weight=True)),
     train_cfg=dict(),
@@ -105,7 +105,7 @@ model = dict(
 
 data_cfg = dict(
     image_size=[512, 512],
-    heatmap_size=[256, 256],
+    heatmap_size=[768, 768],
     num_output_channels=channel_cfg['num_output_channels'],
     num_joints=channel_cfg['dataset_joints'],
     dataset_channel=channel_cfg['dataset_channel'],

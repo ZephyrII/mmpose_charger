@@ -160,6 +160,8 @@ class TopDownChargerDataset(Kpt2dSviewRgbImgTopDownDataset):
         kpts = defaultdict(list)
         avg_acc = []
         avg_mse_loss = []
+        avg_repr_loss = []
+        out = {}
 
         for output in outputs:
             preds = output['preds']
@@ -167,14 +169,19 @@ class TopDownChargerDataset(Kpt2dSviewRgbImgTopDownDataset):
             image_paths = output['image_paths']
             bbox_ids = output['bbox_ids']
             avg_mse_loss.append(output["mse_loss"].cpu().numpy())
+            if "repr_loss" in output.keys():
+                avg_repr_loss.append(output["repr_loss"])
 
             batch_size = len(image_paths)
             for i in range(batch_size):
                 gt_kpt, bbox_h_w = self.read_annotation(image_paths[i].split('/')[-1][:-4]+'.txt')
                 _, acc, _ = keypoint_pck_accuracy(np.expand_dims(preds[i, :, :2], 0), np.expand_dims(gt_kpt, 0), np.full((1,4), True), 0.01, np.array([self.slice_size]))
                 avg_acc.append(acc)
-
-        return {"acc":np.average(avg_acc), "mse_loss":np.average(avg_mse_loss)}
+        out["mse_loss"]=np.average(avg_mse_loss)
+        out["acc"]=np.average(avg_acc)
+        if len(avg_repr_loss):
+            out["repr_loss"]=np.average(avg_repr_loss)
+        return out
 
     def read_annotation(self, file_name):
         ann_path = os.path.join(self.ann_dir, file_name)

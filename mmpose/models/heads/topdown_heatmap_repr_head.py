@@ -1,10 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 import torch.nn as nn
+import numpy as np
+import cv2
+from scipy.optimize import least_squares
 from mmcv.cnn import (build_conv_layer, build_norm_layer, build_upsample_layer,
                       constant_init, normal_init)
 
 from mmpose.core.evaluation import pose_pck_accuracy
+from mmpose.core.evaluation.top_down_eval import _get_max_preds
 from mmpose.core.post_processing import flip_back
 from mmpose.models.builder import build_loss
 from mmpose.models.utils.ops import resize
@@ -13,7 +17,7 @@ from .topdown_heatmap_base_head import TopdownHeatmapBaseHead
 
 
 @HEADS.register_module()
-class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
+class TopdownHeatmapReprHead(TopdownHeatmapBaseHead):
     """Top-down heatmap simple head. paper ref: Bin Xiao et al. ``Simple
     Baselines for Human Pose Estimation and Tracking``.
 
@@ -59,6 +63,8 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                  test_cfg=None,
                  dropout_p=0.0):
         super().__init__()
+        self.object_points = [[-0.35792, -0.02384, -0.63703], [0.3991, -0.01473, -0.60985],
+                              [2.82224, -0.90896, -0.05048], [-0.10018, -0.74608, -0.05833]]
 
         self.in_channels = in_channels
         self.loss = build_loss(loss_keypoint)
@@ -123,7 +129,8 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                             kernel_size=num_conv_kernels[i],
                             stride=1,
                             padding=(num_conv_kernels[i] - 1) // 2))
-                    # layers.append(nn.Dropout(p=dropout_p, inplace=True))
+
+                    layers.append(nn.Dropout(p=dropout_p, inplace=True))
                     layers.append(
                         build_norm_layer(dict(type='BN'), conv_channels)[1])
                     layers.append(nn.ReLU(inplace=True))
@@ -141,6 +148,263 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                 self.final_layer = nn.Sequential(*layers)
             else:
                 self.final_layer = layers[0]
+
+    def _udp_generate_target(self, joints_3d, factor=3,
+                             target_type='GaussianHeatmap'):
+        """Generate the target heatmap via 'UDP' approach. Paper ref: Huang et
+        al. The Devil is in the Details: Delving into Unbiased Data Processing
+        for Human Pose Estimation (CVPR 2020).
+
+        Note:
+            num keypoints: K
+            heatmap height: H
+            heatmap width: W
+            num target channels: C
+            C = K if target_type=='GaussianHeatmap'
+            C = 3*K if target_type=='CombinedTarget'
+
+        Args:
+            cfg (dict): data config
+            joints_3d (np.ndarray[K, 3]): Annotated keypoints.
+            joints_3d_visible (np.ndarray[K, 3]): Visibility of keypoints.
+            factor (float): kernel factor for GaussianHeatmap target or
+                valid radius factor for CombinedTarget.
+            target_type (str): 'GaussianHeatmap' or 'CombinedTarget'.
+                GaussianHeatmap: Heatmap target with gaussian distribution.
+                CombinedTarget: The combination of classification target
+                (response map) and regression target (offset map).
+
+        Returns:
+            tuple: A tuple containing targets.
+
+            - target (np.ndarray[C, H, W]): Target heatmaps.
+            - target_weight (np.ndarray[K, 1]): (1: visible, 0: invisible)
+        """
+        num_joints = 4
+        image_size = np.array([512, 512])
+        heatmap_size = np.array([128, 128])
+        joint_weights = np.ones(4)
+        use_different_joint_weights = False
+
+        target_weight = np.ones((num_joints, 1), dtype=np.float32)
+        # target_weight[:, 0] = joints_3d_visible[:, 0]
+
+        if target_type.lower() == 'GaussianHeatmap'.lower():
+            target = np.zeros((num_joints, heatmap_size[1], heatmap_size[0]),
+                              dtype=np.float32)
+
+            tmp_size = factor * 3
+
+            # prepare for gaussian
+            size = 2 * tmp_size + 1
+            x = np.arange(0, size, 1, np.float32)
+            y = x[:, None]
+
+            for joint_id in range(num_joints):
+                feat_stride = (image_size - 1.0) / (heatmap_size - 1.0)
+                mu_x = int(joints_3d[joint_id][0] / feat_stride[0] + 0.5)
+                mu_y = int(joints_3d[joint_id][1] / feat_stride[1] + 0.5)
+                # Check that any part of the gaussian is in-bounds
+                ul = [int(mu_x - tmp_size), int(mu_y - tmp_size)]
+                br = [int(mu_x + tmp_size + 1), int(mu_y + tmp_size + 1)]
+                if ul[0] >= heatmap_size[0] or ul[1] >= heatmap_size[1] \
+                        or br[0] < 0 or br[1] < 0:
+                    # If not, just return the image as is
+                    target_weight[joint_id] = 0
+                    continue
+
+                # # Generate gaussian
+                mu_x_ac = joints_3d[joint_id][0] / feat_stride[0]
+                mu_y_ac = joints_3d[joint_id][1] / feat_stride[1]
+                x0 = y0 = size // 2
+                x0 += mu_x_ac - mu_x
+                y0 += mu_y_ac - mu_y
+                g = np.exp(-((x - x0)**2 + (y - y0)**2) / (2 * factor**2))
+
+                # Usable gaussian range
+                g_x = max(0, -ul[0]), min(br[0], heatmap_size[0]) - ul[0]
+                g_y = max(0, -ul[1]), min(br[1], heatmap_size[1]) - ul[1]
+                # Image range
+                img_x = max(0, ul[0]), min(br[0], heatmap_size[0])
+                img_y = max(0, ul[1]), min(br[1], heatmap_size[1])
+
+                v = target_weight[joint_id]
+                if v > 0.5:
+                    target[joint_id][img_y[0]:img_y[1], img_x[0]:img_x[1]] = \
+                        g[g_y[0]:g_y[1], g_x[0]:g_x[1]]
+
+        elif target_type.lower() == 'CombinedTarget'.lower():
+            target = np.zeros(
+                (num_joints, 3, heatmap_size[1] * heatmap_size[0]),
+                dtype=np.float32)
+            feat_width = heatmap_size[0]
+            feat_height = heatmap_size[1]
+            feat_x_int = np.arange(0, feat_width)
+            feat_y_int = np.arange(0, feat_height)
+            feat_x_int, feat_y_int = np.meshgrid(feat_x_int, feat_y_int)
+            feat_x_int = feat_x_int.flatten()
+            feat_y_int = feat_y_int.flatten()
+            # Calculate the radius of the positive area in classification
+            #   heatmap.
+            valid_radius = factor * heatmap_size[1]
+            feat_stride = (image_size - 1.0) / (heatmap_size - 1.0)
+            for joint_id in range(num_joints):
+                mu_x = joints_3d[joint_id][0] / feat_stride[0]
+                mu_y = joints_3d[joint_id][1] / feat_stride[1]
+                x_offset = (mu_x - feat_x_int) / valid_radius
+                y_offset = (mu_y - feat_y_int) / valid_radius
+                dis = x_offset**2 + y_offset**2
+                keep_pos = np.where(dis <= 1)[0]
+                v = target_weight[joint_id]
+                if v > 0.5:
+                    target[joint_id, 0, keep_pos] = 1
+                    target[joint_id, 1, keep_pos] = x_offset[keep_pos]
+                    target[joint_id, 2, keep_pos] = y_offset[keep_pos]
+            target = target.reshape(num_joints * 3, heatmap_size[1],
+                                    heatmap_size[0])
+        else:
+            raise ValueError('target_type should be either '
+                             "'GaussianHeatmap' or 'CombinedTarget'")
+
+        if use_different_joint_weights:
+            target_weight = np.multiply(target_weight, joint_weights)
+
+        return target, target_weight
+    def _megvii_generate_target(self, joints_3d,
+                                kernel=(11, 11)):
+        """Generate the target heatmap via "Megvii" approach.
+
+        Args:
+            cfg (dict): data config
+            joints_3d: np.ndarray ([num_joints, 3])
+            joints_3d_visible: np.ndarray ([num_joints, 3])
+            kernel: Kernel of heatmap gaussian
+        Returns:
+            tuple: A tuple containing targets.
+
+            - target: Target heatmaps.
+            - target_weight: (1: visible, 0: invisible)
+        """
+
+        num_joints = 4
+        image_size = [512,512]
+        W, H = [128,128]
+        heatmaps = np.zeros((num_joints, H, W), dtype='float32')
+        target_weight = np.zeros((num_joints, 1), dtype=np.float32)
+
+        for i in range(num_joints):
+            target_weight[i] = 1
+
+            if target_weight[i] < 1:
+                continue
+
+            target_y = int(joints_3d[i, 1] * H / image_size[1])
+            target_x = int(joints_3d[i, 0] * W / image_size[0])
+
+            if (target_x >= W or target_x < 0) \
+                    or (target_y >= H or target_y < 0):
+                target_weight[i] = 0
+                continue
+
+            heatmaps[i, target_y, target_x] = 1
+            heatmaps[i] = cv2.GaussianBlur(heatmaps[i], kernel, 0)
+            maxi = heatmaps[i, target_y, target_x]
+
+            heatmaps[i] /= maxi / 255
+
+        return heatmaps, target_weight
+
+    def _get_max_preds_tensor(self, heatmaps):
+        """Get keypoint predictions from score maps.
+
+        Note:
+            batch_size: N
+            num_keypoints: K
+            heatmap height: H
+            heatmap width: W
+
+        Args:
+            heatmaps (np.ndarray[N, K, H, W]): model predicted heatmaps.
+
+        Returns:
+            tuple: A tuple containing aggregated results.
+
+            - preds (np.ndarray[N, K, 2]): Predicted keypoint location.
+            - maxvals (np.ndarray[N, K, 1]): Scores (confidence) of the keypoints.
+        """
+        N, K, _, W = heatmaps.shape
+        heatmaps_reshaped = heatmaps.reshape((N, K, -1))
+        # idx = np.argmax(heatmaps_reshaped, 2).reshape((N, K, 1))
+        idx = torch.argmax(heatmaps_reshaped, 2).reshape((N, K, 1))
+        # maxvals = np.amax(heatmaps_reshaped, 2).reshape((N, K, 1))
+        maxvals = torch.amax(heatmaps_reshaped, 2).reshape((N, K, 1))
+
+        # preds = np.tile(idx, (1, 1, 2)).astype(np.float32)
+        preds = torch.tile(idx, (1, 1, 2))
+        preds[:, :, 0] = preds[:, :, 0] % W
+        preds[:, :, 1] = preds[:, :, 1] // W
+
+        # preds = np.where(np.tile(maxvals, (1, 1, 2)) > 0.0, preds, -1)
+        preds = torch.where(torch.tile(maxvals, (1, 1, 2)) > 0.0, preds, -1)
+        return preds
+
+    def repr_loss(self, output, img_metas):
+        # pred, _ = self._get_max_preds_tensor(output)
+        preds, _ = _get_max_preds(output.detach().cpu().numpy())
+        kpts3d = self.object_points
+        x = np.array([0,0,0,0,0,30]).astype(np.float32)
+        K = np.array([[4950,0,2620], [0,4960,1888], [0,0,1]]).astype(np.float32)
+
+        def convert_joints3d(joints3d, r, s, t) -> np.ndarray:
+            """Apply rotation, scale and translation to joints3d to generate glob_joints_3d
+            Parameters
+            ----------
+            kpts_format: str
+                Format of used kpt (coco or spin)
+            """
+
+            R, _ = cv2.Rodrigues(r)
+            joints3d = joints3d @ R
+            joints3d_tr = (
+                joints3d * s + t
+            )
+            return joints3d_tr
+        def fun_ls(x,pred):
+            r, t = x[:3], x[3:]
+            j3d_tr = convert_joints3d(kpts3d, r, np.ones(3), t)
+            j2d, _ = cv2.projectPoints(j3d_tr, np.zeros(3), np.zeros(3), K, None)
+            proj = j2d[:, 0, :]#*scale+offset
+
+            loss = proj.reshape((-1))-pred.reshape((-1))
+            return loss
+        loss=0
+        for i, pred in enumerate(preds):
+            # print("keys", img_metas[i].keys())
+            bbox_x, bbox_y, bbox_w, bbox_h = img_metas[i]['bbox']
+            scale = np.array([bbox_w/128, bbox_h/128])
+            offset = np.array([bbox_x, bbox_y])
+            # print("pred0", pred)
+            pred = pred*scale+offset
+
+            opt = least_squares(fun_ls, x, method='lm', kwargs={'pred':pred})
+            x = opt.x
+            r, t = x[:3], x[3:]
+            j3d_tr = convert_joints3d(kpts3d, r, np.ones(3), t)
+            j2d, _ = cv2.projectPoints(j3d_tr, np.zeros(3), np.zeros(3), K, None)
+            # print("jjj", j2d, pred)
+            j2d = (j2d[:, 0, :]-offset)/scale
+            proj = np.concatenate([j2d, np.ones((4,1))], axis=1)
+            # print("proj1", proj, "\n\n")
+            # target_repr, target_repr_weights = self._megvii_generate_target(proj*4, kernel=(5,5))
+            target_repr, target_repr_weights = self._udp_generate_target(proj*4)
+            
+            # print("target_repr", target_repr.T.shape)
+            # cv2.imwrite("/root/mmpose/tests/target_repr.jpg", np.sum(np.transpose(target_repr, (1,2,0)), axis=-1) *255)
+            # print(output.shape, target_repr.shape, target_repr_weights.shape)
+            loss += self.loss(output[i:i+1], torch.from_numpy(np.expand_dims(target_repr, 0)).to(torch.device("cuda")), torch.from_numpy(np.expand_dims(target_repr_weights, 0)).to(torch.device("cuda")))
+        # print("x", x, opt.message)
+        return loss
+
 
     def get_loss(self, output, target, target_weight, img_metas):
         """Calculate top-down keypoint loss.
@@ -163,6 +427,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
         assert not isinstance(self.loss, nn.Sequential)
         assert target.dim() == 4 and target_weight.dim() == 3
         losses['mse_loss'] = self.loss(output, target, target_weight)
+        losses['repr_loss'] = self.repr_loss(output, img_metas)*100
 
         return losses
 
@@ -320,7 +585,7 @@ class TopdownHeatmapSimpleHead(TopdownHeatmapBaseHead):
                     padding=padding,
                     output_padding=output_padding,
                     bias=False))
-            # layers.append(nn.Dropout(p=dropout_p, inplace=True))
+            layers.append(nn.Dropout(p=dropout_p, inplace=True))
             layers.append(nn.BatchNorm2d(planes))
             layers.append(nn.ReLU(inplace=True))
             self.in_channels = planes

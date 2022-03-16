@@ -1,7 +1,7 @@
 _base_ = ['../_base_/datasets/charger_tape.py']
 log_level = 'INFO'
 load_from = None
-ex_name = "c_hrnet32_udp_512_hm256_e20"
+ex_name = "c_hrnet32_udp_512_hm256_repr_v2"
 # resume_from = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/epoch_7.pth"
 resume_from = None
 dist_params = dict(backend='nccl')
@@ -9,6 +9,8 @@ workflow = [('train', 1)]
 checkpoint_config = dict(interval=1)
 evaluation = dict(interval=1, metric='acc', save_best='acc')
 work_dir = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/"
+
+hm_size=[256, 256]
 
 optimizer = dict(
     type='Adam',
@@ -35,7 +37,7 @@ log_config = dict(
                 project='charger',
                 api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4NGRmMmFkNi0wMWNjLTQxY2EtYjQ1OS01YjQ0YzRkYmFlNGIifQ==",
                 name=ex_name,
-                tags=["HRNet32", "512", "HM256", "aug", "e20"])
+                tags=["HRNet32", "512", "HM256", "aug", "repr_cost", "trf"])
             )
     ])
 
@@ -85,14 +87,14 @@ model = dict(
                 num_channels=(32, 64, 128, 256))),
     ),
     keypoint_head=dict(
-        type='TopdownHeatmapSimpleHead',
+        type='TopdownHeatmapReprCostHead',
         in_channels=32,
         out_channels=channel_cfg['num_output_channels'],
         # num_deconv_layers=0,
         num_deconv_layers=1,
         num_deconv_filters=(256,),
         num_deconv_kernels=(4,),
-        extra=dict(final_conv_kernel=1, ),
+        extra=dict(final_conv_kernel=1, hm_size=hm_size),
         loss_keypoint=dict(type='JointsMSELoss', use_target_weight=True)),
     train_cfg=dict(),
     test_cfg=dict(
@@ -105,7 +107,7 @@ model = dict(
 
 data_cfg = dict(
     image_size=[512, 512],
-    heatmap_size=[256, 256],
+    heatmap_size=hm_size,
     num_output_channels=channel_cfg['num_output_channels'],
     num_joints=channel_cfg['dataset_joints'],
     dataset_channel=channel_cfg['dataset_channel'],
@@ -151,7 +153,7 @@ train_pipeline = [
         type='Collect',
         keys=['img', 'target', 'target_weight'],
         meta_keys=[
-            'image_file', 'joints_3d', 'joints_3d_visible', 'center', 'scale',
+            'image_file', 'joints_3d', 'joints_3d_visible', 'center', 'scale', 'bbox',
             'rotation', 'bbox_score', 'flip_pairs'
         ]),
 ]
@@ -173,7 +175,7 @@ val_pipeline = [
         type='Collect',
         keys=['img', "target", "target_weight"],
         meta_keys=[
-            'image_file', 'center', 'scale', 'rotation', 'bbox_score',
+            'image_file', 'center', 'scale', 'rotation', 'bbox_score', 'bbox',
             'flip_pairs'
         ]),
 ]
