@@ -329,7 +329,7 @@ def _inference_single_pose_model(model,
             return_loss=False,
             return_heatmap=return_heatmap)
 
-    return result['preds'], result['output_heatmap']
+    return result
 
 
 def inference_top_down_pose_model(model,

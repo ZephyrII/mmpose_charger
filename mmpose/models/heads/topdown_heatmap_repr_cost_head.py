@@ -188,6 +188,7 @@ class TopdownHeatmapReprCostHead(TopdownHeatmapBaseHead):
     def repr_loss(self, output, img_metas, hm_size):
         # print("hm_size", hm_size)
         preds, _ = _get_max_preds(output.detach().cpu().numpy())
+        # preds, _ = self._get_max_preds_tensor(output.detach().cpu().numpy())
         kpts3d = self.object_points
         x = np.array([0.4,0,0,0,0,30]).astype(np.float32)
         K = np.array([[4950,0,2620], [0,4960,1888], [0,0,1]]).astype(np.float32)
@@ -316,7 +317,7 @@ class TopdownHeatmapReprCostHead(TopdownHeatmapBaseHead):
                 output_heatmap[:, :, :, 1:] = output_heatmap[:, :, :, :-1]
         else:
             output_heatmap = output.detach().cpu().numpy()
-        return output_heatmap
+        return output
 
     def _init_inputs(self, in_channels, in_index, input_transform):
         """Check and initialize input transforms.

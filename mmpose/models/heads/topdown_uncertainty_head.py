@@ -174,6 +174,7 @@ class TopdownUncertaintyHead(TopdownHeatmapBaseHead):
             # print("mahalanobis_loss", mahalanobis_loss)
             losses["uncertainty_loss"] += sigma_loss[sample] + mahalanobis_loss
         # print("uncertainty_loss", losses["uncertainty_loss"])
+        losses["uncertainty_loss"] /=5000
         return losses
 
     # def get_accuracy(self, output, target, target_weight):
@@ -221,9 +222,10 @@ class TopdownUncertaintyHead(TopdownHeatmapBaseHead):
                 Pairs of keypoints which are mirrored.
         """
         output = self.forward(x)       
-        mask = torch.tril(torch.ones([self.out_channels, self.out_channels], dtype=torch.bool))
-        L = torch.zeros([output.shape[0], self.out_channels, self.out_channels])[:, mask] = output
-        sigma = torch.matmul(torch.transpose(L, 1, 2), L).detach().cpu().numpy()
+        mask = torch.tril(torch.ones([self.out_channels*2, self.out_channels*2], dtype=torch.bool))
+        L = torch.zeros([output.shape[0], self.out_channels*2, self.out_channels*2])
+        L[:, mask] = output.cpu()
+        sigma = torch.matmul(torch.transpose(L, 1, 2), L).cpu()
         return sigma
 
     def _init_inputs(self, in_channels, in_index, input_transform):

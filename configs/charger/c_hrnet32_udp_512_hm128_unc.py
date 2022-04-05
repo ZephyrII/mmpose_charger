@@ -1,6 +1,6 @@
 _base_ = ['../_base_/datasets/charger_tape.py']
 log_level = 'INFO'
-load_from = None
+load_from = "/home/tomasz/PhD/charger/GradCam/c_hrnet32_udp_512_hm128/epoch_15.pth"
 ex_name = "c_hrnet32_udp_512_hm128_unc"
 # resume_from = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/epoch_7.pth"
 resume_from = None
@@ -8,7 +8,7 @@ dist_params = dict(backend='nccl')
 workflow = [('train', 1)]
 checkpoint_config = dict(interval=1)
 evaluation = dict(interval=1, metric='acc', save_best='acc')
-work_dir = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/"
+# work_dir = "/root/share/tf/mmpose_checkpoints/"+ex_name+"/"
 
 optimizer = dict(
     type='Adam',
@@ -31,7 +31,7 @@ log_config = dict(
             init_kwargs=dict(
                 # run="CHAR-237",
                 # project="tnowak/charger")
-                mode="debug",
+                # mode="debug",
                 project='charger',
                 api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4NGRmMmFkNi0wMWNjLTQxY2EtYjQ1OS01YjQ0YzRkYmFlNGIifQ==",
                 name=ex_name,
@@ -196,7 +196,7 @@ test_pipeline = [
         ]),
 ]
 
-data_root = '/root/share/tf/dataset/final_localization/corners_1.0'
+data_root = '/home/tomasz/share_docker/corners_1.0'
 data = dict(
     samples_per_gpu=2,
     workers_per_gpu=1,

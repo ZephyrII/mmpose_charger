@@ -242,7 +242,7 @@ class TopDownChargerUnc(BasePose):
 
         if self.with_uncertainty:
             uncertainty_losses = self.uncertainty_head.get_loss(
-                output_uncertainty, target, target_weight, img_metas)
+                output_uncertainty, output, target, img_metas)
             result.update(uncertainty_losses)
             # uncertainty_accuracy = self.uncertainty_head.get_accuracy(
             #     output, target, target_weight)
