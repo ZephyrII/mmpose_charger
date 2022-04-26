@@ -156,6 +156,12 @@ def main():
             mmpose_version=__version__ + get_git_hash(digits=7),
             config=cfg.pretty_text,
         )
+    
+    for name, param in model.named_parameters():
+        if not name.startswith("uncertainty"):
+            print(name)
+            param.requires_grad = False
+
     train_model(
         model,
         datasets,

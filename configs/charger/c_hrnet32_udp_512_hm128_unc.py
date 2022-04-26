@@ -35,7 +35,7 @@ log_config = dict(
                 project='charger',
                 api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4NGRmMmFkNi0wMWNjLTQxY2EtYjQ1OS01YjQ0YzRkYmFlNGIifQ==",
                 name=ex_name,
-                tags=["HRNet32", "512", "HM128", "aug"])
+                tags=["HRNet32", "512", "HM128", "aug", "uncertainty"])
             )
     ])
 
